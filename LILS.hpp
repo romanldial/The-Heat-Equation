@@ -7,26 +7,27 @@
 class LinearImplicitLinearSolve
 {
 public:
-   LinearImplicitLinearSolve(const mfem::SparseMatrix &M,
-                             const mfem::SparseMatrix &K,
+   LinearImplicitLinearSolve(mfem::SparseMatrix &M,
+                             mfem::SparseMatrix &K,
                              mfem::real_t dt);
 
    void SetTimeStep(mfem::real_t dt);
    mfem::real_t GetTimeStep() const;
 
    // Solve (M - dt*K) u_next = M u_current.
-   void Step(const mfem::Vector &u_current, mfem::Vector &u_next);
+   void Step(mfem::Vector &u_current, mfem::Vector &u_next);
    // Solve (M - dt*K) u_next = M u_current + dt*source.
-   void Step(const mfem::Vector &u_current,
+   void Step(mfem::Vector &u_current,
              const mfem::Vector &source,
              mfem::Vector &u_next);
-
+   void UpdateStiffness(mfem::SparseMatrix &K);
+   // Update the stiffness matrix in the time loop
 private:
    void BuildSystemMatrix();
    void ConfigureLinearSolver();
 
-   const mfem::SparseMatrix &M_;
-   const mfem::SparseMatrix &K_;
+   mfem::SparseMatrix &M_;
+   mfem::SparseMatrix &K_;
    mfem::real_t dt_;
 
    mfem::SparseMatrix A_;

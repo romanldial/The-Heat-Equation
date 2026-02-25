@@ -13,8 +13,8 @@
 //      We will take the mass and stiffness matricies from the caller 
 //      and use a Conjugate Gradient solver with a Gauss-Seidel
 //      preconditioner to solve the system.
-LinearImplicitLinearSolve::LinearImplicitLinearSolve(const mfem::SparseMatrix &M,
-                                                     const mfem::SparseMatrix &K,
+LinearImplicitLinearSolve::LinearImplicitLinearSolve(mfem::SparseMatrix &M,
+                                                     mfem::SparseMatrix &K,
                                                      mfem::real_t dt)
    : M_(M),               // Mass matrix
      K_(K),               // Stiffness matrix
@@ -39,14 +39,14 @@ mfem::real_t LinearImplicitLinearSolve::GetTimeStep() const
    return dt_;
 }
 
-void LinearImplicitLinearSolve::Step(const mfem::Vector &u_current,
+void LinearImplicitLinearSolve::Step(mfem::Vector &u_current,
                                      mfem::Vector &u_next)
 {
    M_.Mult(u_current, rhs_);
    lin_solver_.Mult(rhs_, u_next);
 }
 
-void LinearImplicitLinearSolve::Step(const mfem::Vector &u_current,
+void LinearImplicitLinearSolve::Step(mfem::Vector &u_current,
                                      const mfem::Vector &source,
                                      mfem::Vector &u_next)
 {
@@ -70,4 +70,14 @@ void LinearImplicitLinearSolve::ConfigureLinearSolver()
    lin_solver_.SetAbsTol(0.0);
    lin_solver_.SetMaxIter(200);
    lin_solver_.SetPrintLevel(0);
+}
+
+void LinearImplicitLinearSolve::UpdateStiffness(mfem::SparseMatrix &K)
+{
+   K_ = K;
+   BuildSystemMatrix();
+
+   A_prec_ = std::make_unique<mfem::GSSmoother>(A_);
+   lin_solver_.SetOperator(A_);
+   lin_solver_.SetPreconditioner(*A_prec_);
 }
