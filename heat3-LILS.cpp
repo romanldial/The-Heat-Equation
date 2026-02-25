@@ -6,6 +6,39 @@
 using namespace std;
 using namespace mfem;
 
+//      We will use the LinearImplicitLinearSolve class to 
+//      solve the linear system at each time step. This 
+//      first class is for rebuilding the Stiffness matrix 
+//      K at each time step. This is needed because K is non
+//      linear,and depends on the solution at the previous 
+//      time step.
+
+static void RebuildStiffnessFromPreviousTemperature(
+    mfem::FiniteElementSpace &temperature_fespace,
+    const mfem::Array<int> &essential_tdofs,
+    const mfem::Vector &previous_temperature_true_dofs,
+    mfem::real_t kappa,
+    mfem::real_t alpha,
+    mfem::SparseMatrix &stiffness_matrix_K)
+{
+    // Build a FE field from previous timestep temperature.
+    mfem::GridFunction conductivity_field(&temperature_fespace);
+    conductivity_field.SetFromTrueDofs(previous_temperature_true_dofs);
+
+    // Convert temperature u -> conductivity (kappa + alpha*u) at each dof.
+    for (int i = 0; i < conductivity_field.Size(); i++)
+    {
+        conductivity_field(i) = kappa + alpha * conductivity_field(i);
+    }
+
+    // Assemble diffusion stiffness matrix with spatially varying conductivity.
+    mfem::BilinearForm stiffness_form(&temperature_fespace);
+    mfem::GridFunctionCoefficient conductivity_coef(&conductivity_field);
+    stiffness_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(conductivity_coef));
+    stiffness_form.Assemble();
+    stiffness_form.FormSystemMatrix(essential_tdofs, stiffness_matrix_K);
+}
+
 int main(int argc, char *argv[])
 {
 
@@ -61,10 +94,12 @@ int main(int argc, char *argv[])
     
 
     //   5. Set the coefficents used later in assembly 
+    real_t kappa_val = 0.5;
     real_t alpha_val = 1.0;
     real_t q_flux_val = 373.15;
     real_t zero = 0.0;
     real_t fixed_temp = 273.15;
+    ConstantCoefficient kappaCoef(kappa_val);
     ConstantCoefficient alphaCoef(alpha_val); 
     ConstantCoefficient qFluxCoef(q_flux_val);
     ConstantCoefficient zeroCoef(zero);
@@ -106,24 +141,27 @@ int main(int argc, char *argv[])
     //      and the forcing vector B. Then Form constrained 
     //      linear system for the operator 'a' and rhs 'b'
     //      For this linear problem, we will set up K 
-    //      such that K = (kappa - alpha u) where u is the 
+    //      such that K = (kappa + alpha u) where u is the 
     //      solution at one step behind. 
 
     m.Assemble();
     a.Assemble();
     b.Assemble();
+        Vector B = b;
+        for (int i = 0; i < ess_tdof_list.Size(); i++)
+        {
+            B(ess_tdof_list[i]) = 0.0;
+        }
     SparseMatrix M, K;
-    
-    Vector B(b.Size());
     m.FormSystemMatrix(ess_tdof_list, M);
     a.FormSystemMatrix(ess_tdof_list, K);
-    b.FormSystemVector(ess_tdof_list, B);
+    
     
 
     //  12. Solve the system using LinearImplicitLinearSolve class.
     //      Unlike the last example, because K is non-linear we 
     //      will need to update K at each time step and rebuld the 
-    //      system matrix A = M - dt*K after we rebuild K.  
+    //      system matrix A = M + dt*K after we rebuild K.  
 
 
     real_t dt = 1e-3;
@@ -133,8 +171,11 @@ int main(int argc, char *argv[])
     Vector u(x.Size());
     u = x;
     Vector u_next(u.Size());
-    while (t <= t_final)
+    while (t < t_final)
     {
+        RebuildStiffnessFromPreviousTemperature(*fespace, ess_tdof_list, u,
+                                        kappa_val, alpha_val, K);
+
         LILS.UpdateStiffness(K);
         LILS.Step(u, B, u_next);
         u = u_next;

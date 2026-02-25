@@ -14,9 +14,9 @@ public:
    void SetTimeStep(mfem::real_t dt);
    mfem::real_t GetTimeStep() const;
 
-   // Solve (M - dt*K) u_next = M u_current.
+   // Solve (M + dt*K) u_next = M u_current.
    void Step(mfem::Vector &u_current, mfem::Vector &u_next);
-   // Solve (M - dt*K) u_next = M u_current + dt*source.
+   // Solve (M + dt*K) u_next = M u_current + dt*source.
    void Step(mfem::Vector &u_current,
              const mfem::Vector &source,
              mfem::Vector &u_next);
