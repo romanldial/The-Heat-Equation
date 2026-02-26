@@ -13,30 +13,10 @@ using namespace mfem;
 //      linear,and depends on the solution at the previous 
 //      time step.
 
-static void RebuildStiffnessFromPreviousTemperature(
-    mfem::FiniteElementSpace &temperature_fespace,
-    const mfem::Array<int> &essential_tdofs,
-    const mfem::Vector &previous_temperature_true_dofs,
-    mfem::real_t kappa,
-    mfem::real_t alpha,
-    mfem::SparseMatrix &stiffness_matrix_K)
+static void CopyLaggedState(const mfem::Vector &u_current,
+                            mfem::GridFunction &u_lagged_gf)
 {
-    // Build a FE field from previous timestep temperature.
-    mfem::GridFunction conductivity_field(&temperature_fespace);
-    conductivity_field.SetFromTrueDofs(previous_temperature_true_dofs);
-
-    // Convert temperature u -> conductivity (kappa + alpha*u) at each dof.
-    for (int i = 0; i < conductivity_field.Size(); i++)
-    {
-        conductivity_field(i) = kappa + alpha * conductivity_field(i);
-    }
-
-    // Assemble diffusion stiffness matrix with spatially varying conductivity.
-    mfem::BilinearForm stiffness_form(&temperature_fespace);
-    mfem::GridFunctionCoefficient conductivity_coef(&conductivity_field);
-    stiffness_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(conductivity_coef));
-    stiffness_form.Assemble();
-    stiffness_form.FormSystemMatrix(essential_tdofs, stiffness_matrix_K);
+    u_lagged_gf.SetFromTrueDofs(u_current);
 }
 
 int main(int argc, char *argv[])
@@ -171,13 +151,33 @@ int main(int argc, char *argv[])
     Vector u(x.Size());
     u = x;
     Vector u_next(u.Size());
+    GridFunction u_lagged_gf(fespace);
+    GridFunctionCoefficient u_lagged_coef(&u_lagged_gf);
+    ProductCoefficient alpha_u(alphaCoef, u_lagged_coef);
+    SumCoefficient k_eff(kappaCoef, alpha_u);
+
+    //      Checks before the loop:
+    MFEM_VERIFY(u.Size() == fespace->GetTrueVSize(), "u size != true dof size");
+    MFEM_VERIFY(B.Size() == u.Size(), "B size mismatch");
+    MFEM_VERIFY(M.Height() == u.Size() && M.Width() == u.Size(), "M size mismatch");
+    MFEM_VERIFY(K.Height() == u.Size() && K.Width() == u.Size(), "K size mismatch");
+    MFEM_VERIFY(u.Norml2() == u.Norml2(), "u has NaN");
+    MFEM_VERIFY(B.Norml2() == B.Norml2(), "B has NaN");
+
     while (t < t_final)
     {
-        RebuildStiffnessFromPreviousTemperature(*fespace, ess_tdof_list, u,
-                                        kappa_val, alpha_val, K);
-
+        cout << "step start t=" << t << endl;
+        CopyLaggedState(u, u_lagged_gf);
+        cout << "copied lagged state" << endl;
+        BilinearForm a_lagged(fespace);
+        a_lagged.AddDomainIntegrator(new DiffusionIntegrator(k_eff));
+        a_lagged.Assemble();
+        a_lagged.FormSystemMatrix(ess_tdof_list, K);
+        cout << "rebuilt K" << endl;
         LILS.UpdateStiffness(K);
+        cout << "updated solver operator" << endl;
         LILS.Step(u, B, u_next);
+        cout << "solved step" << endl;
         u = u_next;
         t += dt;
         cout << "Time: " << t << endl;
