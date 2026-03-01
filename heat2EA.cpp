@@ -2,22 +2,10 @@
 #include "LILS.hpp"
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 
 using namespace std;
 using namespace mfem;
-
-//      We will use the LinearImplicitLinearSolve class to 
-//      solve the linear system at each time step. This 
-//      first class is for rebuilding the Stiffness matrix 
-//      K at each time step. This is needed because K is non
-//      linear,and depends on the solution at the previous 
-//      time step.
-
-static void CopyLaggedState(const mfem::Vector &u_current,
-                            mfem::GridFunction &u_lagged_gf)
-{
-    u_lagged_gf.SetFromTrueDofs(u_current);
-}
 
 int main(int argc, char *argv[])
 {
@@ -74,12 +62,10 @@ int main(int argc, char *argv[])
     
 
     //   5. Set the coefficents used later in assembly 
-    real_t kappa_val = 0.5;
     real_t alpha_val = 1.0;
     real_t q_flux_val = 373.15;
     real_t zero = 0.0;
     real_t fixed_temp = 273.15;
-    ConstantCoefficient kappaCoef(kappa_val);
     ConstantCoefficient alphaCoef(alpha_val); 
     ConstantCoefficient qFluxCoef(q_flux_val);
     ConstantCoefficient zeroCoef(zero);
@@ -90,7 +76,7 @@ int main(int argc, char *argv[])
     //      coefficient
     GridFunction x(fespace);
     x = 0.0;
-    x.ProjectBdrCoefficient(fixedTempCoef, left_bdr);
+    x.ProjectBdrCoefficient(fixedTempCoef, ess_tdof_list);
 
 
     //   7. Set up the Bileniear Form m(.) and a(.). Here the 
@@ -120,63 +106,31 @@ int main(int argc, char *argv[])
     //   9. Assemble the mass matrix M, diffusion matrix K
     //      and the forcing vector B. Then Form constrained 
     //      linear system for the operator 'a' and rhs 'b'
-    //      For this linear problem, we will set up K 
-    //      such that K = (kappa + alpha u) where u is the 
-    //      solution at one step behind. 
-
     m.Assemble();
     a.Assemble();
     b.Assemble();
-    SparseMatrix M, K;
+    SparseMatrix M;
+    SparseMatrix K;
     Vector B(b.Size());
     m.FormSystemMatrix(ess_tdof_list, M);
     a.FormSystemMatrix(ess_tdof_list, K);
 
-    OperatorPtr A_sys;
+    OperatorPtr A;
     Vector X;
-    a.FormLinearSystem(ess_tdof_list, x, b, A_sys, X, B);
+    a.FormLinearSystem(ess_tdof_list, x, b, A, X, B);
     
-    
 
-    //  12. Solve the system using LinearImplicitLinearSolve class.
-    //      Unlike the last example, because K is non-linear we 
-    //      will need to update K at each time step and rebuld the 
-    //      system matrix A = M + dt*K after we rebuild K.  
-
-
-    real_t dt = 1e-3;
+    //  12. Solve the system using LinearImplicitLinearSolve class
+    //      The python parent file should specify the time step size.
+    real_t dt = atof(argv[1]);
     real_t t = 0.0;
     real_t t_final = 1.0;
     LinearImplicitLinearSolve LILS(M, K, dt);
     Vector u = X;
     Vector u_next(u.Size());
-    GridFunction u_lagged_gf(fespace);
-    GridFunctionCoefficient u_lagged_coef(&u_lagged_gf);
-    ProductCoefficient alpha_u(alphaCoef, u_lagged_coef);
-    SumCoefficient k_eff(kappaCoef, alpha_u);
-
-    //      Checks before the loop:
-    MFEM_VERIFY(u.Size() == fespace->GetTrueVSize(), "u size != true dof size");
-    MFEM_VERIFY(B.Size() == u.Size(), "B size mismatch");
-    MFEM_VERIFY(M.Height() == u.Size() && M.Width() == u.Size(), "M size mismatch");
-    MFEM_VERIFY(K.Height() == u.Size() && K.Width() == u.Size(), "K size mismatch");
-    MFEM_VERIFY(u.Norml2() == u.Norml2(), "u has NaN");
-    MFEM_VERIFY(B.Norml2() == B.Norml2(), "B has NaN");
-
-    while (t < t_final)
+    while (t <= t_final)
     {
-        cout << "step start t=" << t << endl;
-        CopyLaggedState(u, u_lagged_gf);
-        cout << "copied lagged state" << endl;
-        BilinearForm a_lagged(fespace);
-        a_lagged.AddDomainIntegrator(new DiffusionIntegrator(k_eff));
-        a_lagged.Assemble();
-        a_lagged.FormSystemMatrix(ess_tdof_list, K);
-        cout << "rebuilt K" << endl;
-        LILS.UpdateStiffness(K);
-        cout << "updated solver operator" << endl;
         LILS.Step(u, B, u_next);
-        cout << "solved step" << endl;
         u = u_next;
         t += dt;
         cout << "Time: " << t << endl;
@@ -194,20 +148,36 @@ int main(int argc, char *argv[])
     K.Mult(x, Kx);
     real_t energy_norm = sqrt(x * Kx);
 
+
     //      Norms of RHS B and of Mx, Kx
     real_t B_norm = B.Norml2();
     real_t Mx_norm = Mx.Norml2();
     real_t Kx_norm = Kx.Norml2();
 
-    //      Residual r = Kx - B
+    //      Residual r = Kx - B + M(u^n+1 - u^n)/dt
+    Vector du(x.Size());
+    du = u_next;
+    du -= u;           // u_next - u
+    
+    Vector Mdu(x.Size());
+    M.Mult(du, Mdu);   // M * (u_next - u)
+    Mdu /= dt;          // divide by dt
+
     Vector r(x.Size());
-    r = Kx;
+    r += Kx;
     r -= B;
+    r += Mdu;
+    r /= dt; 
     real_t r_l2 = r.Norml2();
     
 
-    cout << "B L2: " << B_norm << ", Mx L2: " << Mx_norm << ", Kx L2: " << Kx_norm << endl;
+//    cout << "B L2: " << B_norm << ", Mx L2: " << Mx_norm << ", Kx L2: " << Kx_norm << endl;
     cout << "Residual L2: " << r_l2 << endl;
+    string results = "L2_Results";
+    filesystem::create_directory(results);
+    ofstream outfile(results + "/L2outputFile.txt");
+    outfile << r_l2 << endl;
+    outfile.close();
 
     delete fespace;
     delete fec;

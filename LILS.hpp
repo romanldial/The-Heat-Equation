@@ -30,11 +30,11 @@ private:
    mfem::SparseMatrix &K_;
    mfem::real_t dt_;
 
-   mfem::SparseMatrix A_;
+   std::unique_ptr<mfem::SparseMatrix> T_;
    mfem::Vector rhs_;
 
    mfem::CGSolver lin_solver_;
-   std::unique_ptr<mfem::GSSmoother> A_prec_;
+   std::unique_ptr<mfem::DSmoother> A_prec_;
 };
 
 #endif

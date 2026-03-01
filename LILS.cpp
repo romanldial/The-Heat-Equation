@@ -19,7 +19,7 @@ LinearImplicitLinearSolve::LinearImplicitLinearSolve(mfem::SparseMatrix &M,
    : M_(M),               // Mass matrix
      K_(K),               // Stiffness matrix
      dt_(dt),             // Time step size
-     A_(),                // System matrix (M + dt*K)
+     T_(nullptr),         // System matrix (M + dt*K)
      rhs_(M.Height()),    // Right-hand side vector
      lin_solver_()        // Linear solver
 {
@@ -44,6 +44,13 @@ void LinearImplicitLinearSolve::Step(mfem::Vector &u_current,
 {
    M_.Mult(u_current, rhs_);
    lin_solver_.Mult(rhs_, u_next);
+
+   mfem::Vector Au(rhs_.Size());
+   T_->Mult(u_next, Au);
+   Au -= rhs_;
+   const mfem::real_t rhs_n = rhs_.Norml2();
+   const mfem::real_t rel_res = Au.Norml2() / (rhs_n > 0.0 ? rhs_n : 1.0);
+   MFEM_VERIFY(rel_res == rel_res, "Linear solve residual is NaN.");
 }
 
 void LinearImplicitLinearSolve::Step(mfem::Vector &u_current,
@@ -53,31 +60,38 @@ void LinearImplicitLinearSolve::Step(mfem::Vector &u_current,
    M_.Mult(u_current, rhs_);
    rhs_.Add(dt_, source);
    lin_solver_.Mult(rhs_, u_next);
+
+
+   mfem::Vector Au(rhs_.Size());
+   T_->Mult(u_next, Au);
+   Au -= rhs_;
+   const mfem::real_t rhs_n = rhs_.Norml2();
+   const mfem::real_t rel_res = Au.Norml2() / (rhs_n > 0.0 ? rhs_n : 1.0);
+   MFEM_VERIFY(rel_res == rel_res, "Linear solve residual is NaN.");
 }
 
 void LinearImplicitLinearSolve::BuildSystemMatrix()
 {
-   A_ = M_;
-   A_.Add(dt_, K_);
+   T_.reset(mfem::Add(1.0, M_, dt_, K_));
 }
 
 void LinearImplicitLinearSolve::ConfigureLinearSolver()
 {
-   A_prec_ = std::make_unique<mfem::GSSmoother>(A_);
-   lin_solver_.SetOperator(A_);
+   lin_solver_.SetOperator(*T_);
+   A_prec_ = std::make_unique<mfem::DSmoother>(*T_);
    lin_solver_.SetPreconditioner(*A_prec_);
-   lin_solver_.SetRelTol(1e-12);
+   lin_solver_.SetRelTol(1e-8);
    lin_solver_.SetAbsTol(0.0);
-   lin_solver_.SetMaxIter(200);
+   lin_solver_.SetMaxIter(1000);
    lin_solver_.SetPrintLevel(0);
 }
 
 void LinearImplicitLinearSolve::UpdateStiffness(mfem::SparseMatrix &K)
 {
-   K_ = K;
+   (void)K;
    BuildSystemMatrix();
 
-   A_prec_ = std::make_unique<mfem::GSSmoother>(A_);
-   lin_solver_.SetOperator(A_);
+   lin_solver_.SetOperator(*T_);
+   A_prec_ = std::make_unique<mfem::DSmoother>(*T_);
    lin_solver_.SetPreconditioner(*A_prec_);
 }
