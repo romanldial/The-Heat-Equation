@@ -32,9 +32,8 @@ private:
 
    std::unique_ptr<mfem::SparseMatrix> T_;
    mfem::Vector rhs_;
-
-   mfem::CGSolver lin_solver_;
    std::unique_ptr<mfem::DSmoother> A_prec_;
+   mfem::CGSolver lin_solver_;
 };
 
 #endif

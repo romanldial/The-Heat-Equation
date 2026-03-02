@@ -54,11 +54,9 @@ int main(int argc, char *argv[])
 
 
     //   3. Define the finite element space on the mesh. 
-    FiniteElementCollection *fec;
-    FiniteElementSpace *fespace;
-    fec = new H1_FECollection(order, dim);
-    fespace = new FiniteElementSpace(&mesh, fec);
-    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
+    H1_FECollection fec(order, dim);
+    FiniteElementSpace fespace(&mesh, &fec);
+    cout << "Number of finite element unknowns: " << fespace.GetTrueVSize()
         << endl << "Assembling: " << flush;
 
 
@@ -70,7 +68,7 @@ int main(int argc, char *argv[])
     cout << mesh.bdr_attributes.Max() << flush;
     left_bdr = 0;
     left_bdr[4-1] = 1;
-    fespace->GetEssentialTrueDofs(left_bdr, ess_tdof_list);
+    fespace.GetEssentialTrueDofs(left_bdr, ess_tdof_list);
     
 
     //   5. Set the coefficents used later in assembly 
@@ -88,7 +86,7 @@ int main(int argc, char *argv[])
 
     //   6. Define the Grid Function & project Dirichlet Boundary
     //      coefficient
-    GridFunction x(fespace);
+    GridFunction x(&fespace);
     x = 0.0;
     x.ProjectBdrCoefficient(fixedTempCoef, left_bdr);
 
@@ -97,9 +95,9 @@ int main(int argc, char *argv[])
     //      mass integratorsets up the integral over space of 
     //      (u * v), while the diffusion integrator sets up the
     //      integral over space of (alpha*Nabla_u dot Nabla_v).
-    BilinearForm m(fespace);
+    BilinearForm m(&fespace);
     m.AddDomainIntegrator(new MassIntegrator);
-    BilinearForm a(fespace);
+    BilinearForm a(&fespace);
     a.AddDomainIntegrator(new DiffusionIntegrator(alphaCoef));
 
 
@@ -108,7 +106,7 @@ int main(int argc, char *argv[])
     //      and everything enters through that right boundary.
     //      This sets up the surface integral over the boundary
     //      of (-alpha Nabla_u dot n).
-    LinearForm b(fespace);
+    LinearForm b(&fespace);
     b = 0.0;
     Array<int> right_bdr(mesh.bdr_attributes.Max());
     right_bdr = 0;
@@ -145,18 +143,18 @@ int main(int argc, char *argv[])
 
 
     real_t dt = 1e-3;
-    real_t t = 0.0;
+    real_t t = 1e-3;
     real_t t_final = 1.0;
     LinearImplicitLinearSolve LILS(M, K, dt);
     Vector u = X;
     Vector u_next(u.Size());
-    GridFunction u_lagged_gf(fespace);
+    GridFunction u_lagged_gf(&fespace);
     GridFunctionCoefficient u_lagged_coef(&u_lagged_gf);
     ProductCoefficient alpha_u(alphaCoef, u_lagged_coef);
     SumCoefficient k_eff(kappaCoef, alpha_u);
 
     //      Checks before the loop:
-    MFEM_VERIFY(u.Size() == fespace->GetTrueVSize(), "u size != true dof size");
+    MFEM_VERIFY(u.Size() == fespace.GetTrueVSize(), "u size != true dof size");
     MFEM_VERIFY(B.Size() == u.Size(), "B size mismatch");
     MFEM_VERIFY(M.Height() == u.Size() && M.Width() == u.Size(), "M size mismatch");
     MFEM_VERIFY(K.Height() == u.Size() && K.Width() == u.Size(), "K size mismatch");
@@ -165,18 +163,13 @@ int main(int argc, char *argv[])
 
     while (t < t_final)
     {
-        cout << "step start t=" << t << endl;
         CopyLaggedState(u, u_lagged_gf);
-        cout << "copied lagged state" << endl;
-        BilinearForm a_lagged(fespace);
+        BilinearForm a_lagged(&fespace);
         a_lagged.AddDomainIntegrator(new DiffusionIntegrator(k_eff));
         a_lagged.Assemble();
         a_lagged.FormSystemMatrix(ess_tdof_list, K);
-        cout << "rebuilt K" << endl;
         LILS.UpdateStiffness(K);
-        cout << "updated solver operator" << endl;
         LILS.Step(u, B, u_next);
-        cout << "solved step" << endl;
         u = u_next;
         t += dt;
         cout << "Time: " << t << endl;
@@ -184,15 +177,20 @@ int main(int argc, char *argv[])
     X = u;
     x = X;
 
+    // Rebuild K for the converged state so postprocessing uses a valid matrix.
+    CopyLaggedState(u, u_lagged_gf);
+    BilinearForm a_post(&fespace);
+    a_post.AddDomainIntegrator(new DiffusionIntegrator(k_eff));
+    a_post.Assemble();
+    a_post.FormSystemMatrix(ess_tdof_list, K);
 
-    //  13. Get L2 Norms and Energy Norms. Compute the L2 norm by: 
-    //      sqrt(x^T M x) and energy norm: sqrt(x^T K x).
-    Vector tmp(x.Size());
-    Vector Mx(x.Size());
-    Vector Kx(x.Size());
-    M.Mult(x, Mx);
-    K.Mult(x, Kx);
-    real_t energy_norm = sqrt(x * Kx);
+
+    //  13. Get L2 Norms and Energy Norms on true dofs.
+    Vector Mx(u.Size());
+    Vector Kx(u.Size());
+    M.Mult(u, Mx);
+    K.Mult(u, Kx);
+    real_t energy_norm = sqrt(u * Kx);
 
     //      Norms of RHS B and of Mx, Kx
     real_t B_norm = B.Norml2();
@@ -200,7 +198,7 @@ int main(int argc, char *argv[])
     real_t Kx_norm = Kx.Norml2();
 
     //      Residual r = Kx - B
-    Vector r(x.Size());
+    Vector r(u.Size());
     r = Kx;
     r -= B;
     real_t r_l2 = r.Norml2();
@@ -209,8 +207,5 @@ int main(int argc, char *argv[])
     cout << "B L2: " << B_norm << ", Mx L2: " << Mx_norm << ", Kx L2: " << Kx_norm << endl;
     cout << "Residual L2: " << r_l2 << endl;
 
-    delete fespace;
-    delete fec;
- 
     return 0;
 }

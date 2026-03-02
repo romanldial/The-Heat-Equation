@@ -77,9 +77,10 @@ void LinearImplicitLinearSolve::BuildSystemMatrix()
 
 void LinearImplicitLinearSolve::ConfigureLinearSolver()
 {
+   auto new_prec = std::make_unique<mfem::DSmoother>(*T_);
    lin_solver_.SetOperator(*T_);
-   A_prec_ = std::make_unique<mfem::DSmoother>(*T_);
-   lin_solver_.SetPreconditioner(*A_prec_);
+   lin_solver_.SetPreconditioner(*new_prec);
+   A_prec_ = std::move(new_prec);
    lin_solver_.SetRelTol(1e-8);
    lin_solver_.SetAbsTol(0.0);
    lin_solver_.SetMaxIter(1000);
@@ -91,7 +92,8 @@ void LinearImplicitLinearSolve::UpdateStiffness(mfem::SparseMatrix &K)
    (void)K;
    BuildSystemMatrix();
 
+   auto new_prec = std::make_unique<mfem::DSmoother>(*T_);
    lin_solver_.SetOperator(*T_);
-   A_prec_ = std::make_unique<mfem::DSmoother>(*T_);
-   lin_solver_.SetPreconditioner(*A_prec_);
+   lin_solver_.SetPreconditioner(*new_prec);
+   A_prec_ = std::move(new_prec);
 }
